@@ -1,5 +1,18 @@
 package main
 
+/*
+
+TODO (no particular order):
+* Add some annotation and/or docs
+* Add a readme
+* do we need to return / make cp object in main() ? all config set up & catching is done in the config parsing func
+* getApiClient feels a bit light on error catching and handling...
+* getDnskeyFromDns feels like its duplicating a lot of the RCODE checking from doQuery...?
+  double check, but mindful of whether everything expects an answer as opposed to delegation etc?
+* getDnskeyFromDns should probably return a map of resource records instead of that faff...?
+
+*/
+
 import (
 	"context"
 	"errors"
@@ -137,7 +150,7 @@ func doQuery(qname string, qtype uint16) (*dns.Msg, error) {
 	nameserverAddr := config["nameserverAddr"]
 	nameserverPort := config["nameserverPort"]
 
-	_debug(fmt.Sprintf("doQuery: qname is %s, qtype is %s", qname, dns.TypeToString[qtype]))
+	_debug(fmt.Sprintf("qname is %s, qtype is %s", qname, dns.TypeToString[qtype]))
 
 	c := new(dns.Client)
 	c.Net = "tcp"
@@ -228,6 +241,7 @@ func dsExistsInRegistry(domain string, keytag uint16) bool {
 func getDnskeyFromDns(qname string) (map[uint16]string, error) {
 
 	r, err := doQuery(qname, dns.TypeDNSKEY)
+	// duplication of error checking from the doQuery function...
 	if err != nil || r == nil {
 		fmt.Fprintf(os.Stderr, "Cannot retrieve keys for %s: %s\n", qname, err)
 		os.Exit(1)
@@ -245,10 +259,8 @@ func getDnskeyFromDns(qname string) (map[uint16]string, error) {
 		fmt.Fprintf(os.Stderr, "response is neither authoritative nor validated")
 		os.Exit(1)
 	}
-	//if rr, ok := r.Answer[0].(*dns.DNSKEY); ok {
-	//	fmt.Printf("got dnskey with keytag %v and flags %d\n", rr.KeyTag, rr.Flags)
-	//}
 
+	// we should (prep, and) return a map of resource record objects instead of this.
 	dnskeys := make(map[uint16]string)
 	for _, ans := range r.Answer {
 		switch rr := ans.(type) {
@@ -268,7 +280,7 @@ func getDnskeyFromDns(qname string) (map[uint16]string, error) {
 	if len(dnskeys) > 0 {
 		return dnskeys, nil
 	} else {
-		return nil, errors.New("no keys found")
+		return nil, errors.New("no keys found in DNS")
 	}
 }
 
