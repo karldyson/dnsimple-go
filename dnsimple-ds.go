@@ -5,6 +5,7 @@ package main
 TODO (no particular order):
 * Add some annotation and/or docs
 * Add a readme
+* We should check that the domain is in the account before proceeding, rather than waiting for an error later
 * do we need to return / make cp object in main() ? all config set up & catching is done in the config parsing func
 * getApiClient feels a bit light on error catching and handling...
 * getDnskeyFromDns feels like its duplicating a lot of the RCODE checking from doQuery...?
@@ -14,6 +15,7 @@ TODO (no particular order):
 */
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -23,6 +25,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/bigkevmcd/go-configparser"
 	"github.com/dnsimple/dnsimple-go/dnsimple"
@@ -118,9 +121,48 @@ func main() {
 			fmt.Printf("no keytag was supplied for addition, listing DNSKEY records found in DNS for domain %s\n", domain)
 			listDnskeyInDns(domain)
 		} else {
+			_, err, ok := dsExistsInRegistry(domain, keytag)
+			if err == nil && ok {
+				fmt.Fprintf(os.Stderr, "DS record with keytag %d already exists in the registry in domain %s\n", keytag, domain)
+				os.Exit(1)
+			}
 			fmt.Printf("checking DNS for existence of DNSKEY with keytag %d in domain %s\n", keytag, domain)
-			if dnskeyExistsInDns(domain, keytag) {
+			dnskeyRr, err := dnskeyExistsInDns(domain, keytag)
+			if err == nil {
 				fmt.Printf("DNSKEY with keytag %d exists in DNS in %s\n", keytag, domain)
+
+				// ask the user if they really want to, if it's a ZSK
+				if dnskeyRr.Flags == 256 {
+					if !askUserYesNo(fmt.Sprintf("keytag %d is a ZSK, are you sure you want to proceed?", keytag)) {
+						fmt.Printf("Operation aborted\n")
+						return
+					}
+				}
+
+				digestType, err := strconv.ParseUint(config["dsDigestType"], 10, 8)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error converting string digest type (%s) to integer value\n", config["dsDigestType"])
+					os.Exit(1)
+				}
+				fmt.Printf("Creating DS record witih digest type %s from DNSKEY record\n", dns.HashToString[uint8(digestType)])
+				dsRr := dnskeyRr.ToDS(uint8(digestType))
+				fmt.Printf("DS record created: DS %d %d %d %s\n", dsRr.KeyTag, dsRr.Algorithm, dsRr.DigestType, dsRr.Digest)
+
+				// create the DS
+				var delegationSigner dnsimple.DelegationSignerRecord
+				delegationSigner.Keytag = strconv.FormatUint(uint64(dsRr.KeyTag), 10)
+				delegationSigner.Algorithm = strconv.FormatUint(uint64(dsRr.Algorithm), 10)
+				delegationSigner.DigestType = strconv.FormatUint(uint64(dsRr.DigestType), 10)
+				delegationSigner.Digest = dsRr.Digest
+				client := getApiClient()
+				dsResponse, err := client.Domains.CreateDelegationSignerRecord(context.Background(), config["accountNumber"], domain, delegationSigner)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error creating DS record in the registry: %s\n", err)
+					os.Exit(1)
+				}
+				fmt.Printf("DS record created in the registry with ID %d\n", dsResponse.Data.ID)
+				fmt.Println("Note that is may take some time for the DS record to appear in DNS")
+				return
 			} else {
 				fmt.Fprintf(os.Stderr, "DNSKEY with keytag %d does not exist in DNS in %s\n", keytag, domain)
 				os.Exit(1)
@@ -132,8 +174,19 @@ func main() {
 			listDsInRegistry(domain)
 		} else {
 			fmt.Printf("checking registry for existence of DS record with keytag %d in domain %s\n", keytag, domain)
-			if dsExistsInRegistry(domain, keytag) {
+			dsR, err, ok := dsExistsInRegistry(domain, keytag)
+			if err == nil && ok {
 				fmt.Printf("DS record with keytag %d exists in domain %s in the registry\n", keytag, domain)
+
+				// delete the DS
+				client := getApiClient()
+				_, err := client.Domains.DeleteDelegationSignerRecord(context.Background(), config["accountNumber"], domain, dsR.ID)
+				if err == nil {
+					fmt.Printf("DS record with ID %d deleted", dsR.ID)
+				} else {
+					fmt.Fprintf(os.Stderr, "Error received from registrar API: %s\n", err)
+					os.Exit(1)
+				}
 			} else {
 				fmt.Fprintf(os.Stderr, "a DS record with keytag %d cannot be found in domain %s in the registry\n", keytag, domain)
 			}
@@ -142,6 +195,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown action: %s\n", action)
 		flag.Usage()
 		os.Exit(1)
+	}
+}
+
+func askUserYesNo(s string) bool {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("%s [y/N]: ", s)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error requesting confirmation from user: %s\n", err)
+	}
+	response = strings.ToLower(strings.TrimSpace(response))
+	if response == "y" || response == "yes" {
+		return true
+	} else {
+		// you can
+		// else if response == "n" || response == "no" {
+		// and wrap in a for {} to force y or n
+		return false
 	}
 }
 
@@ -216,11 +287,12 @@ func listDsInRegistry(domain string) {
 	}
 }
 
-func dsExistsInRegistry(domain string, keytag uint16) bool {
+func dsExistsInRegistry(domain string, keytag uint16) (dnsimple.DelegationSignerRecord, error, bool) {
 	dsRecords, err := getDsFromRegistry(domain)
+	var dsr dnsimple.DelegationSignerRecord
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error retrieving list of keys for %s: %s\n", domain, err)
-		return false
+		return dsr, errors.New(fmt.Sprintf("error retrieving list of keys: %s", err)), false
 	} else {
 		for _, ds := range dsRecords.Data {
 			_debug(fmt.Sprintf("got ds with keytag %s", ds.Keytag))
@@ -230,15 +302,15 @@ func dsExistsInRegistry(domain string, keytag uint16) bool {
 			}
 			if uint16(dsKeytag) == keytag {
 				fmt.Printf("DS with keytag %d exists in the registry\n", keytag)
-				return true
+				return ds, nil, true
 			}
 		}
-		return false
+		return dsr, errors.New("DS does not exist"), true
 	}
 
 }
 
-func getDnskeyFromDns(qname string) (map[uint16]string, error) {
+func getDnskeyFromDns(qname string) (map[uint16]dns.DNSKEY, error) {
 
 	r, err := doQuery(qname, dns.TypeDNSKEY)
 	// duplication of error checking from the doQuery function...
@@ -261,20 +333,23 @@ func getDnskeyFromDns(qname string) (map[uint16]string, error) {
 	}
 
 	// we should (prep, and) return a map of resource record objects instead of this.
-	dnskeys := make(map[uint16]string)
+	dnskeys := make(map[uint16]dns.DNSKEY)
 	for _, ans := range r.Answer {
 		switch rr := ans.(type) {
 		case *dns.DNSKEY:
 			_debug(fmt.Sprintf("got DNSKEY with keytag %d and flags %d", rr.KeyTag(), rr.Flags))
-			switch rr.Flags {
-			case 256:
-				dnskeys[rr.KeyTag()] = "ZSK"
-			case 257:
-				dnskeys[rr.KeyTag()] = "KSK"
-			default:
-				fmt.Fprintf(os.Stderr, "Unknown flags in response: %d\n", rr.Flags)
-				os.Exit(1)
-			}
+			dnskeys[rr.KeyTag()] = *rr
+			/*
+				switch rr.Flags {
+				case 256:
+					dnskeys[rr.KeyTag()] = "ZSK"
+				case 257:
+					dnskeys[rr.KeyTag()] = "KSK"
+				default:
+					fmt.Fprintf(os.Stderr, "Unknown flags in response: %d\n", rr.Flags)
+					os.Exit(1)
+				}
+			*/
 		}
 	}
 	if len(dnskeys) > 0 {
@@ -297,23 +372,24 @@ func listDnskeyInDns(domain string) {
 		fmt.Printf("There are %d DNSKEY records\n", len(dnskeys))
 	}
 	for key := range dnskeys {
-		fmt.Printf("  => DNSKEY %d (type %s)\n", key, dnskeys[key])
+		fmt.Printf("  => DNSKEY %d (type %d)\n", key, dnskeys[key].Flags)
 	}
 }
 
-func dnskeyExistsInDns(qname string, keytag uint16) bool {
+func dnskeyExistsInDns(qname string, keytag uint16) (dns.DNSKEY, error) {
 	dnskeys, err := getDnskeyFromDns(qname)
+	var r dns.DNSKEY
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error retrieving DNSKEY records for %s: %s\n", qname, err)
-		return false
+		return r, err
 	} else {
 		for key := range dnskeys {
 			if key == keytag {
-				fmt.Printf("keytag %d exists with type %s\n", keytag, dnskeys[key])
-				return true
+				fmt.Printf("keytag %d exists with type %d\n", keytag, dnskeys[key].Flags)
+				return dnskeys[key], nil
 			}
 		}
-		return false
+		return r, errors.New("key doesn't exist")
 	}
 }
 
@@ -380,7 +456,13 @@ func parseConfigurationFile(file string) (*configparser.ConfigParser, []error) {
 	} else {
 		_verbose(fmt.Sprintf("nameserver port set to %s from configuration", config["nameserverPort"]))
 	}
-
+	config["dsDigestType"], err = p.Get("ds", "digest_type")
+	if err != nil || config["dsDigestType"] == "" {
+		_verbose("no DS record digest type in configuration; defaulting to 2 (SHA-256)")
+		config["dsDigestType"] = "2"
+	} else {
+		_verbose(fmt.Sprintf("DS records digest type set to %d from configuration", config["dsDigestType"]))
+	}
 	// optional, where fallback defaults are baked in
 	// for example, if you don't specify the endpoint, it'll default to prod
 	config["apiEndpoint"], err = p.Get("api", "endpoint")
