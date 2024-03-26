@@ -1,3 +1,4 @@
+// Package provides dnsimple-ds which facilitates the manipulation of DS records in the registry via the DNS Simple API
 package main
 
 /*
@@ -32,16 +33,18 @@ import (
 	"github.com/miekg/dns"
 )
 
+// global variable declarations
 var (
-	configFile = flag.String("config", "/usr/local/etc/dnsimple.cfg", "configuration file")
-	debug      = flag.Bool("debug", false, "enable debug output")
-	verbose    = flag.Bool("verbose", false, "verbose output")
-	config     map[string]string
-	cp         *configparser.ConfigParser
-	tc         *http.Client
-	apiClient  *dnsimple.Client
+	configFile = flag.String("config", "/usr/local/etc/dnsimple.cfg", "configuration file") // the configuration file
+	debug      = flag.Bool("debug", false, "enable debug output")                           // debug?
+	verbose    = flag.Bool("verbose", false, "verbose output")                              // verbosity?
+	config     map[string]string                                                            // the configuration map
+	cp         *configparser.ConfigParser                                                   // pointer to the config parser object although I think this is uneeded?
+	tc         *http.Client                                                                 // pointer to the global token client object
+	apiClient  *dnsimple.Client                                                             // pointer to the global API client object
 )
 
+// main collects the CLI flags,
 func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] <domain> [action] [keytag]\n", os.Args[0])
@@ -53,31 +56,40 @@ func main() {
 		flag.PrintDefaults()
 	}
 
+	// parse the CLI flags
 	flag.Parse()
 
+	// set verbosity if debug is enabled
 	if *debug && !*verbose {
 		*verbose = true
 	}
 
 	config = make(map[string]string)
 
+	// variables scoped to the main function
 	var (
-		domain string
-		action string = "list"
-		keytag uint16
-		errs   []error
+		domain string           // the domain we're processing
+		action string  = "list" // the action we're taking
+		keytag uint16           // the keytag we're processing
+		errs   []error          // somewhere for errors
 	)
 
 	// do we need to collect the returned value(s) ..? parsing the config can be done in the func only...?
 	cp, errs = parseConfigurationFile(*configFile)
 	if errs != nil {
-		fmt.Fprintf(os.Stderr, "Configuration error(s) while parsing config file (%s)\n%s\n", *configFile, errs)
+		fmt.Fprintf(os.Stderr, "Error: Configuration error(s) while parsing config file (%s)\n%s\n", *configFile, errs)
 		os.Exit(1)
 	} else {
 		_verbose(fmt.Sprintf("Configuration loaded from %s", *configFile))
 	}
 
+	// switch the length of the CLI arguments left after CLI flag processing
+	// we're expecting <domain> and then optionally the <action> which will default to "list" and an optional <keytag>
 	switch len(flag.Args()) {
+	case 0:
+		fmt.Fprintf(os.Stderr, "Error: no domain supplied\n")
+		flag.Usage()
+		os.Exit(1)
 	case 1:
 		domain = flag.Args()[0]
 	case 2:
@@ -86,24 +98,32 @@ func main() {
 	case 3:
 		domain = flag.Args()[0]
 		action = flag.Args()[1]
+		// we parse the keytag into a 16 bit unsigned integer to allow us to catch if it's not 0-65535
 		kt, err := strconv.ParseUint(flag.Args()[2], 10, 16)
 		if err == nil {
-			keytag = uint16(kt)
+			keytag = uint16(kt) // parsing it above gives us a uint64 and we want uint16
 		} else {
-			fmt.Fprintf(os.Stderr, "Fatal: %s is not a valid keytag: %s\n", flag.Args()[2], err)
+			// so error and exit if it's not valid
+			fmt.Fprintf(os.Stderr, "Error: %s is not a valid keytag. Expected an integer in the range 1-65535\n", flag.Args()[2])
+			_debug(fmt.Sprintf("Error: Parsing the keytag into an unsigned integer resulted in error: %s\n", err))
 			os.Exit(1)
 		}
+		// we need to catch it being 0, so belt and braces while we're here...
 		if keytag <= 0 || keytag > 65535 {
-			fmt.Fprintf(os.Stderr, "Fatal: keytag %d is out of valid range\n", keytag)
+			fmt.Fprintf(os.Stderr, "Error: keytag %d is out of valid range. Expected an integer in the range 1-65535\n", keytag)
+			os.Exit(1)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "Error: no domain supplied\n")
+		// and a default catching something weird
+		fmt.Fprintf(os.Stderr, "Error: invalid number of CLI parameters\n")
 		flag.Usage()
 		os.Exit(1)
 	}
 
+	// some debug to clarify the options we are operating with...
 	_debug(fmt.Sprintf("domain: %s, action: %s, keytag: %d", domain, action, keytag))
 
+	// work out what action we're performing
 	switch action {
 	case "list", "listds":
 		fmt.Printf("Listing DS records in the registry for domain %s\n", domain)
@@ -118,37 +138,41 @@ func main() {
 		listDnskeyInDns(domain)
 	case "add":
 		if keytag <= 0 {
-			fmt.Printf("no keytag was supplied for addition, listing DNSKEY records found in DNS for domain %s\n", domain)
+			fmt.Printf("Warning: no keytag was supplied for addition, listing DNSKEY records found in DNS for domain %s\n", domain)
 			listDnskeyInDns(domain)
 		} else {
 			_, err, ok := dsExistsInRegistry(domain, keytag)
 			if err == nil && ok {
-				fmt.Fprintf(os.Stderr, "DS record with keytag %d already exists in the registry in domain %s\n", keytag, domain)
+				fmt.Fprintf(os.Stderr, "Error: DS record with keytag %d already exists in the registry in domain %s\n", keytag, domain)
 				os.Exit(1)
 			}
-			fmt.Printf("checking DNS for existence of DNSKEY with keytag %d in domain %s\n", keytag, domain)
+			_verbose(fmt.Sprintf("Checking DNS for existence of DNSKEY with keytag %d in domain %s\n", keytag, domain))
 			dnskeyRr, err := dnskeyExistsInDns(domain, keytag)
 			if err == nil {
-				fmt.Printf("DNSKEY with keytag %d exists in DNS in %s\n", keytag, domain)
+				_verbose(fmt.Sprintf("DNSKEY with keytag %d exists in DNS in %s\n", keytag, domain))
 
 				// ask the user if they really want to, if it's a ZSK
 				if dnskeyRr.Flags == 256 {
-					if !askUserYesNo(fmt.Sprintf("keytag %d is a ZSK, are you sure you want to proceed?", keytag)) {
+					if !askUserYesNo(fmt.Sprintf("The DNSKEY with keytag %d is a ZSK, are you sure you want to proceed?", keytag)) {
 						fmt.Printf("Operation aborted\n")
 						return
 					}
 				}
 
+				// validate that the keyset is signed with the DNSKEY requested
+				// if it is NOT signed with this key, but is the same algorithm as the existing DS record(s), adding will NOT cause issues
+
+				// we've done all the checks, create and add the DS
 				digestType, err := strconv.ParseUint(config["dsDigestType"], 10, 8)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "error converting string digest type (%s) to integer value\n", config["dsDigestType"])
+					fmt.Fprintf(os.Stderr, "Error: error converting string digest type (%s) to integer value\n", config["dsDigestType"])
+					_debug(fmt.Sprintf("Error: converting the digest type (%s) to an integer resulted in error: %s\n", config["dsDigestType"], err))
 					os.Exit(1)
 				}
-				fmt.Printf("Creating DS record witih digest type %s from DNSKEY record\n", dns.HashToString[uint8(digestType)])
+				_verbose(fmt.Sprintf("Creating DS record witih digest type %s from DNSKEY record\n", dns.HashToString[uint8(digestType)]))
 				dsRr := dnskeyRr.ToDS(uint8(digestType))
-				fmt.Printf("DS record created: DS %d %d %d %s\n", dsRr.KeyTag, dsRr.Algorithm, dsRr.DigestType, dsRr.Digest)
+				_debug(fmt.Sprintf("DS record created: DS %d %d %d %s\n", dsRr.KeyTag, dsRr.Algorithm, dsRr.DigestType, dsRr.Digest))
 
-				// create the DS
 				var delegationSigner dnsimple.DelegationSignerRecord
 				delegationSigner.Keytag = strconv.FormatUint(uint64(dsRr.KeyTag), 10)
 				delegationSigner.Algorithm = strconv.FormatUint(uint64(dsRr.Algorithm), 10)
@@ -157,53 +181,60 @@ func main() {
 				client := getApiClient()
 				dsResponse, err := client.Domains.CreateDelegationSignerRecord(context.Background(), config["accountNumber"], domain, delegationSigner)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "error creating DS record in the registry: %s\n", err)
+					fmt.Fprintf(os.Stderr, "Error: error creating DS record in the registry: %s\n", err)
 					os.Exit(1)
 				}
-				fmt.Printf("DS record created in the registry with ID %d\n", dsResponse.Data.ID)
-				fmt.Println("Note that is may take some time for the DS record to appear in DNS")
+				fmt.Printf("DS record with keytag %d created in domain %s in the registry with ID %d\n", keytag, domain, dsResponse.Data.ID)
+				fmt.Println("Note that it may take some time for the DS record to appear in DNS.")
 				return
 			} else {
-				fmt.Fprintf(os.Stderr, "DNSKEY with keytag %d does not exist in DNS in %s\n", keytag, domain)
+				fmt.Fprintf(os.Stderr, "Error: DNSKEY with keytag %d does not exist in DNS in domain %s\n", keytag, domain)
 				os.Exit(1)
 			}
 		}
 	case "delete":
 		if keytag <= 0 {
-			fmt.Printf("no keytag was supplied for deletion, listing DS records found in the registry for domain %s\n", domain)
+			fmt.Printf("Warning: no keytag was supplied for deletion, listing DS records found in the registry for domain %s\n", domain)
 			listDsInRegistry(domain)
 		} else {
-			fmt.Printf("checking registry for existence of DS record with keytag %d in domain %s\n", keytag, domain)
+			_verbose(fmt.Sprintf("Checking registry for existence of DS record with keytag %d in domain %s\n", keytag, domain))
 			dsR, err, ok := dsExistsInRegistry(domain, keytag)
 			if err == nil && ok {
-				fmt.Printf("DS record with keytag %d exists in domain %s in the registry\n", keytag, domain)
+				_verbose(fmt.Sprintf("DS record with keytag %d exists in domain %s in the registry\n", keytag, domain))
 
 				// delete the DS
 				client := getApiClient()
 				_, err := client.Domains.DeleteDelegationSignerRecord(context.Background(), config["accountNumber"], domain, dsR.ID)
 				if err == nil {
-					fmt.Printf("DS record with ID %d deleted", dsR.ID)
+					fmt.Printf("DS record with keytag %d and ID %d in domain %s deleted", keytag, dsR.ID, domain)
 				} else {
-					fmt.Fprintf(os.Stderr, "Error received from registrar API: %s\n", err)
+					fmt.Fprintf(os.Stderr, "Error: error received from registrar API while deleting DS record (keytag %s, ID %d): %s\n", err, keytag, dsR.ID)
 					os.Exit(1)
 				}
 			} else {
-				fmt.Fprintf(os.Stderr, "a DS record with keytag %d cannot be found in domain %s in the registry\n", keytag, domain)
+				fmt.Fprintf(os.Stderr, "Error: DS record with keytag %d cannot be found in domain %s in the registry\n", keytag, domain)
+				os.Exit(1)
 			}
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown action: %s\n", action)
+		fmt.Fprintf(os.Stderr, "Error: unknown action: %s\n", action)
 		flag.Usage()
 		os.Exit(1)
 	}
 }
 
+// askUserYesNo takes a string and prompts the user with that string and a y/N
+// If the user replies with y, Y, yes, Yes, then it returns true
+// Anything else returns false
+// It takes one parameter, the string to be prompted to the user
+// It returns one bool depending on whether the user said Y or not.
 func askUserYesNo(s string) bool {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Printf("%s [y/N]: ", s)
 	response, err := reader.ReadString('\n')
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error requesting confirmation from user: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error: error requesting confirmation from user: %s\n", err)
+		os.Exit(1)
 	}
 	response = strings.ToLower(strings.TrimSpace(response))
 	if response == "y" || response == "yes" {
@@ -216,12 +247,16 @@ func askUserYesNo(s string) bool {
 	}
 }
 
+// doQuery performs DNS lookups. It takes two parameters, the domain to be looked up and the qtype
+// queries are performed over TCP, with DO and RD set
+// queries are sent to the nameserver and port parsed from the config
+// It returns the dns response object amd an error object
 func doQuery(qname string, qtype uint16) (*dns.Msg, error) {
 
 	nameserverAddr := config["nameserverAddr"]
 	nameserverPort := config["nameserverPort"]
 
-	_debug(fmt.Sprintf("qname is %s, qtype is %s", qname, dns.TypeToString[qtype]))
+	_debug(fmt.Sprintf("Sending query for %s/%s to %s", qname, dns.TypeToString[qtype], net.JoinHostPort(nameserverAddr, nameserverPort)))
 
 	c := new(dns.Client)
 	c.Net = "tcp"
@@ -232,18 +267,21 @@ func doQuery(qname string, qtype uint16) (*dns.Msg, error) {
 	r, rtt, err := c.Exchange(m, net.JoinHostPort(nameserverAddr, nameserverPort))
 	_verbose(fmt.Sprintf("Response received from %s:%s in %s\n", nameserverAddr, nameserverPort, rtt))
 	if err != nil {
-		_debug(fmt.Sprintf("Query for %s/%s resulted in error: %s", qname, dns.TypeToString[qtype], err))
+		_debug(fmt.Sprintf("Error: query for %s/%s resulted in error: %s", qname, dns.TypeToString[qtype], err))
 		return nil, err
 	}
 	if r == nil || r.Rcode == dns.RcodeNameError || r.Rcode == dns.RcodeSuccess {
-		_debug(fmt.Sprintf("Query for %s/%s resulted in rcode %s", qname, dns.TypeToString[qtype], dns.RcodeToString[r.Rcode]))
+		_debug(fmt.Sprintf("query for %s/%s resulted in rcode %s", qname, dns.TypeToString[qtype], dns.RcodeToString[r.Rcode]))
 		return r, err
 	}
 	return nil, errors.New("wibble")
 }
 
-// feels like there's not a lot of error catching/handling going on here...
+// getApiClient either creates or passes back an existing globel client object
+// it takes no parameters
+// it returns a pointer to the client object
 func getApiClient() *dnsimple.Client {
+	// feels like there's not a lot of error catching/handling going on here...
 	if tc == nil {
 		_debug("token client does not exist, so creating it")
 		tc = dnsimple.StaticTokenHTTPClient(context.Background(), config["apiKey"])
@@ -260,20 +298,26 @@ func getApiClient() *dnsimple.Client {
 	return apiClient
 }
 
+// getDsFromRegistry uses the registrar API to get a list of the DS records in the registry
+// It takes one parameter, the domain to be queried
+// It returns two parameters, the DS record response and an error object
 func getDsFromRegistry(domain string) (*dnsimple.DelegationSignerRecordsResponse, error) {
 	client := getApiClient()
 	dsResponse, err := client.Domains.ListDelegationSignerRecords(context.Background(), config["accountNumber"], domain, nil)
 	if err != nil {
-		errorString := fmt.Sprintf("Error fetching DS records from registry for domain %s: %s\n", domain, err)
+		errorString := fmt.Sprintf("Error: error fetching DS records from registry for domain %s: %s\n", domain, err)
 		return nil, errors.New(errorString)
 	}
 	return dsResponse, nil
 }
 
+// listDsInRegistry produces pretty (!!) output of DS records found in the registry
+// It takes one parameter, that being the domain to be queried
+// It returns nothing.
 func listDsInRegistry(domain string) {
 	dsRecords, err := getDsFromRegistry(domain)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error fetching DS records from the registry: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error: error fetching DS records from the registry: %s\n", err)
 		os.Exit(1)
 	}
 	switch len(dsRecords.Data) {
@@ -287,29 +331,44 @@ func listDsInRegistry(domain string) {
 	}
 }
 
+// dsExistsInRegistry determines whether a specific DS record exists in the registry
+// It takes two parameters, the domain to be queried and the keytag to be verified
+// It returns a DS object, an error object and a boolean
+// The error will contain any errors encountered
+// The boolean determines whether the DS record exists
+// Hence, the combination determines the status:
+// error == nil, ok bool is true => DS exists (DS will be in the DS object)
+// error != nil, ok bool is true => DS does not exist
+// error != nil, ok bool is false => an error occurred trying
 func dsExistsInRegistry(domain string, keytag uint16) (dnsimple.DelegationSignerRecord, error, bool) {
 	dsRecords, err := getDsFromRegistry(domain)
 	var dsr dnsimple.DelegationSignerRecord
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error retrieving list of keys for %s: %s\n", domain, err)
+		fmt.Fprintf(os.Stderr, "Error: error retrieving list of keys for %s: %s\n", domain, err)
 		return dsr, errors.New(fmt.Sprintf("error retrieving list of keys: %s", err)), false
 	} else {
 		for _, ds := range dsRecords.Data {
 			_debug(fmt.Sprintf("got ds with keytag %s", ds.Keytag))
 			dsKeytag, err := strconv.ParseUint(ds.Keytag, 10, 16)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Fatal error converting keytag: %s", err)
+				fmt.Fprintf(os.Stderr, "Error: error converting keytag: %s", err)
+				os.Exit(1)
 			}
 			if uint16(dsKeytag) == keytag {
-				fmt.Printf("DS with keytag %d exists in the registry\n", keytag)
+				_debug(fmt.Sprintf("DS with keytag %d exists in the registry\n", keytag))
 				return ds, nil, true
 			}
 		}
-		return dsr, errors.New("DS does not exist"), true
+		return dsr, errors.New("DS record does not exist"), true
 	}
 
 }
 
+// getDnskeyFromDns looks up DNSKEY records in DNS
+// It takes one parameter, the domain to be queried
+// It returns a map of DNSKEYs indexed by keytag and an error object
+// It expects the query to be done with RD and DO and that the response returned to it
+// is either authoritative (AA) or validated (AD) - you should trust the validator if the latter!
 func getDnskeyFromDns(qname string) (map[uint16]dns.DNSKEY, error) {
 
 	r, err := doQuery(qname, dns.TypeDNSKEY)
@@ -339,17 +398,6 @@ func getDnskeyFromDns(qname string) (map[uint16]dns.DNSKEY, error) {
 		case *dns.DNSKEY:
 			_debug(fmt.Sprintf("got DNSKEY with keytag %d and flags %d", rr.KeyTag(), rr.Flags))
 			dnskeys[rr.KeyTag()] = *rr
-			/*
-				switch rr.Flags {
-				case 256:
-					dnskeys[rr.KeyTag()] = "ZSK"
-				case 257:
-					dnskeys[rr.KeyTag()] = "KSK"
-				default:
-					fmt.Fprintf(os.Stderr, "Unknown flags in response: %d\n", rr.Flags)
-					os.Exit(1)
-				}
-			*/
 		}
 	}
 	if len(dnskeys) > 0 {
@@ -359,10 +407,13 @@ func getDnskeyFromDns(qname string) (map[uint16]dns.DNSKEY, error) {
 	}
 }
 
+// listDnsketInDns produces pretty output of the DNSKEY records found in DNS
+// It takes one parameter, that being the domain to be queried
+// It returns nothing.
 func listDnskeyInDns(domain string) {
 	dnskeys, err := getDnskeyFromDns(domain)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Erroring fetching DNSKEYs from DNS for domain %s: %s\n", domain, err)
+		fmt.Fprintf(os.Stderr, "Error: error fetching DNSKEYs from DNS for domain %s: %s\n", domain, err)
 		os.Exit(1)
 	}
 	switch len(dnskeys) {
@@ -372,20 +423,38 @@ func listDnskeyInDns(domain string) {
 		fmt.Printf("There are %d DNSKEY records\n", len(dnskeys))
 	}
 	for key := range dnskeys {
-		fmt.Printf("  => DNSKEY %d (type %d)\n", key, dnskeys[key].Flags)
+		k := dnskeys[key]
+		var keyType string
+		switch k.Flags {
+		case 256:
+			keyType = "ZSK"
+		case 257:
+			keyType = "KSK"
+		default:
+			fmt.Fprintf(os.Stderr, "Error: DNSKEY keytag %d in domain %s has unknown flags: %d\n", key, domain, k.Flags)
+			os.Exit(1)
+		}
+		fmt.Printf("  => DNSKEY; keytag: %5d; flags: %d (%s); Algorithm: %d (%s)\n", key, k.Flags, keyType, k.Algorithm, dns.AlgorithmToString[k.Algorithm])
 	}
 }
 
+// dnskeyExistsInDns determinies whether a DNSKEY exists in DNS
+// It takes two parameters, the domain to be queried and the keytag of the DNSKEY
+// It returns a DNSKEY object and an error object
+// If the error is set, either the key does not exist, or there was an error checking
+// If the error is unset, the DNSKEY will be found in the returned object
+// I'm debating switching to the method in dsExistsInRegistry as it allows the caller to
+// determine whether there was an actual error, or the key doesn't exist.
 func dnskeyExistsInDns(qname string, keytag uint16) (dns.DNSKEY, error) {
 	dnskeys, err := getDnskeyFromDns(qname)
 	var r dns.DNSKEY
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error retrieving DNSKEY records for %s: %s\n", qname, err)
+		fmt.Fprintf(os.Stderr, "Error: error retrieving DNSKEY records for %s: %s\n", qname, err)
 		return r, err
 	} else {
 		for key := range dnskeys {
 			if key == keytag {
-				fmt.Printf("keytag %d exists with type %d\n", keytag, dnskeys[key].Flags)
+				_debug(fmt.Sprintf("keytag %d exists with type %d\n", keytag, dnskeys[key].Flags))
 				return dnskeys[key], nil
 			}
 		}
@@ -393,6 +462,7 @@ func dnskeyExistsInDns(qname string, keytag uint16) (dns.DNSKEY, error) {
 	}
 }
 
+// _verbose takes a string and only outputs it if verbosity is requested via the -verbose CLI flag
 func _verbose(msgString string) {
 	if !*verbose {
 		return
@@ -400,6 +470,8 @@ func _verbose(msgString string) {
 	fmt.Printf("%s\n", msgString)
 }
 
+// _debug takes a string and only outputs it if debug mode is enabled with the -debug CLI flag
+// function adds the calling function and line number to the output to aid debugging
 func _debug(debugString string) {
 	if !*debug {
 		return
@@ -409,17 +481,23 @@ func _debug(debugString string) {
 	if ok && details != nil {
 		fmt.Printf("DEBUG :: %s#%d :: %s\n", details.Name(), no, debugString)
 	} else {
-		fmt.Fprintf(os.Stderr, "fatal error determining debug calling function")
+		fmt.Fprintf(os.Stderr, "Error: fatal error determining debug calling function")
 		os.Exit(1)
 	}
 }
 
+// parseConfigurationFile parses the configuration file
+// It takes one parameter, the config file. defaulting if -config is not passed on the CLI is handled in the flag parsing
+// It returns a config parser object and an array of errors
+// Mandatory items such as the API key and account number cause errors if missing
+// Items that can fall back to defaults, such as the nameserver, do so
+// Note that NOT passing an endpoint to the library causes it to default to production and so we don't need to
 func parseConfigurationFile(file string) (*configparser.ConfigParser, []error) {
 	_debug(fmt.Sprintf("loading configuration from %s", file))
 	p, err := configparser.NewConfigParserFromFile(file)
 	var errs []error
 	if err != nil {
-		errStr := fmt.Sprintf("Error parsing config from %s: %s\n", file, err)
+		errStr := fmt.Sprintf("error parsing config from %s: %s\n", file, err)
 		fmt.Fprint(os.Stderr, errStr)
 		errs = append(errs, errors.New(errStr))
 		return nil, errs
