@@ -14,20 +14,30 @@ So far, there are the following examples:
 
 ### dnsimple-ds
 
-This script facilitates the manipulation of the DS records for a given domain
+dnsimple-ds facilitates the manipulation of the DS records for a given domain
 within the TLD's zonefile.
 
 In the case of adding, given you should not want to add a DS record for a key
-that is not published, the script will use a nameserver, defaulting to
-127.0.0.1, to query for the DNSKEYs for the domain.
+that is not published, checks will use a nameserver, defaulting to 127.0.0.1,
+to query for the DNSKEYs for the domain.
 
-It expects the server to either provide an authoritative response (setting AA)
-or to conduct DNSSEC validation (setting AD). You should therefore trust the
-server you set in the configuration.
+It is expected that the server to either provide an authoritative response
+(setting AA) or to conduct DNSSEC validation (setting AD). You should therefore
+trust the server you set in the configuration if you're not running locally on
+the authoritative server.
 
 I run this locally on the auth primary for my zones.
 
-The script will then create the DS from the key and submit that to the API.
+Further checks will then be carried out in order to warn the user if:
+
+* The requested key is a Zone Signing Key instead of a Key Signing Key
+* The requested key is not being used to sign the DNSKEY record set
+
+The user is prompted, if there are warnings, to see if they want to proceed.
+
+This behaviour can be overridden and the operation forced with the -force flag.
+
+The DS record will then be created from the DNSKEY and submitted to the API.
 
 ## Caveats
 

@@ -3,15 +3,16 @@ package main
 
 /*
 
+Copyright (c) 2024 Karl Dyson.
+All rights reserved.
+
 TODO (no particular order):
 * Add some annotation and/or docs
-* Add a readme
+* Add a license, copyright, etc
 * We should check that the domain is in the account before proceeding, rather than waiting for an error later
-* do we need to return / make cp object in main() ? all config set up & catching is done in the config parsing func
 * getApiClient feels a bit light on error catching and handling...
 * getDnskeyFromDns feels like its duplicating a lot of the RCODE checking from doQuery...?
   double check, but mindful of whether everything expects an answer as opposed to delegation etc?
-* getDnskeyFromDns should probably return a map of resource records instead of that faff...?
 
 */
 
@@ -43,17 +44,21 @@ func main() {
 	flag.Parse()
 
 	// set verbosity if debug is enabled
-	if *debugOutput && !*verbose {
-		*verbose = true
+	if *debugOutput && !*verboseOutput {
+		*verboseOutput = true
 	}
 
-	if *version {
-		//		goVer := runtime.Version
+	if *revision {
 		bi, ok := debug.ReadBuildInfo()
 		if !ok {
 			panic("not ok!")
 		}
-		fmt.Printf("%s version information:\n%+v\n", os.Args[0], bi)
+		fmt.Printf("%s version information:\ncommit: %s\n%+v\n", os.Args[0], versionString, bi)
+		return
+	}
+
+	if *version {
+		fmt.Printf("%s version %s\n", os.Args[0], versionString)
 		return
 	}
 
@@ -68,7 +73,7 @@ func main() {
 	)
 
 	// do we need to collect the returned value(s) ..? parsing the config can be done in the func only...?
-	cp, errs = parseConfigurationFile(*configFile)
+	_, errs = parseConfigurationFile(*configFile)
 	if errs != nil {
 		fmt.Fprintf(os.Stderr, "Error: Configuration error(s) while parsing config file (%s)\n%s\n", *configFile, errs)
 		os.Exit(1)
@@ -144,16 +149,79 @@ func main() {
 			if err == nil {
 				_verbose(fmt.Sprintf("DNSKEY with keytag %d exists in DNS in %s\n", keytag, domain))
 
+				// validate that the keyset is signed with the DNSKEY requested
+				// if it is NOT signed with this key, but is the same algorithm as the existing DS record(s), adding will NOT cause issues
+				keyset, err := doQuery(domain, dns.TypeDNSKEY)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: cannot retrieve keyset for domain %s: %s\n", domain, err)
+					os.Exit(1)
+				}
+
+				var keysetSignedWithRequestedKey bool = false
+				keyAlgs := make(map[uint8]uint8)
+				for _, ans := range keyset.Answer {
+					switch rr := ans.(type) {
+					case *dns.RRSIG:
+						_debug(fmt.Sprintf("got RRSIG with keytag %d and algorithm %d", rr.KeyTag, rr.Algorithm))
+						keyAlgs[rr.Algorithm]++
+						if keytag == rr.KeyTag {
+							keysetSignedWithRequestedKey = true
+						}
+					}
+				}
+				var warnings []string
+				if keysetSignedWithRequestedKey {
+					_verbose(fmt.Sprintf("The DNSKEY keyset in domain %s is signed with keytag %d", domain, keytag))
+				} else {
+					_debug(fmt.Sprintf("Warning: the DNSKEY keyset in domain %s is NOT signed with keytag %d\n", domain, keytag))
+					warnings = append(warnings, fmt.Sprintf("The DNSKEY record set is not signed with the DNSKEY with keytag %d", keytag))
+					existingDsSet, err := getDsFromRegistry(domain)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error: failed to fetch existing DS records from registry for domain %s: %s\n", domain, err)
+						os.Exit(1)
+					}
+					for _, ds := range existingDsSet.Data {
+						dsA, err := strconv.ParseUint(ds.Algorithm, 10, 8)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "Error: error converting string to integer: %s\n", err)
+							os.Exit(1)
+						}
+						dsAlg := uint8(dsA)
+						if keyAlgs[dsAlg] > 0 {
+							_debug(fmt.Sprintf("Requested addition (%d) matches algorithm of existing DS record(s) (%d)\n", dnskeyRr.Algorithm, keyAlgs))
+							if len(warnings) > 0 {
+								warnings[0] = fmt.Sprintf("%s\n     (although it's of the same algorithm as existing DS records, so may be ok if you're pre-publishing)", warnings[0])
+							}
+						} else {
+							_debug(fmt.Sprintf("Warning: algorithm of requested DS addition (%d) does NOT match the algorithm of an existing DS record(s) (%d)\n", dnskeyRr.Algorithm, keyAlgs))
+							warnings = append(warnings, fmt.Sprintf("The DNSKEY with keytag %d does NOT match algorithm of existing DS record(s)", keytag))
+						}
+					}
+				}
+
 				// ask the user if they really want to, if it's a ZSK
 				if dnskeyRr.Flags == 256 {
-					if !askUserYesNo(fmt.Sprintf("The DNSKEY with keytag %d is a ZSK, are you sure you want to proceed?", keytag)) {
+					_debug(fmt.Sprintf("Warning: the DNSKEY with keytag %d is a ZSK (%d)\n", keytag, dnskeyRr.Flags))
+					warnings = append(warnings, fmt.Sprintf("The DNSKEY with keytag %d is a ZSK", keytag))
+				}
+
+				switch len(warnings) {
+				case 1:
+					fmt.Printf("There is a warning for this addition:\n")
+					fmt.Printf("  => %s\n", warnings[0])
+				default:
+					fmt.Printf("There are %d warnings for this addition:\n", len(warnings))
+					for _, w := range warnings {
+						fmt.Printf("  => %s\n", w)
+					}
+				}
+
+				if len(warnings) > 0 && !*forceOperation {
+					if !askUserYesNo("Given the warnings, do you want to proceed?") {
 						fmt.Printf("Operation aborted\n")
 						return
 					}
 				}
-
-				// validate that the keyset is signed with the DNSKEY requested
-				// if it is NOT signed with this key, but is the same algorithm as the existing DS record(s), adding will NOT cause issues
 
 				// we've done all the checks, create and add the DS
 				digestType, err := strconv.ParseUint(config["dsDigestType"], 10, 8)

@@ -1,3 +1,10 @@
+/*
+
+Copyright (c) 2024 Karl Dyson.
+All rights reserved.
+
+*/
+
 package main
 
 import (
@@ -20,14 +27,16 @@ import (
 
 // global variable declarations
 var (
-	configFile  = flag.String("config", "/usr/local/etc/dnsimple.cfg", "configuration file") // the configuration file
-	debugOutput = flag.Bool("debug", false, "enable debug output")                           // debug?
-	verbose     = flag.Bool("verbose", false, "verbose output")                              // verbosity?
-	version     = flag.Bool("version", false, "the code version")
-	config      map[string]string          // the configuration map
-	cp          *configparser.ConfigParser // pointer to the config parser object although I think this is uneeded?
-	tc          *http.Client               // pointer to the global token client object
-	apiClient   *dnsimple.Client           // pointer to the global API client object
+	configFile     = flag.String("config", "/usr/local/etc/dnsimple.cfg", "configuration file") // the configuration file
+	debugOutput    = flag.Bool("debug", false, "enable debug output")                           // debug?
+	verboseOutput  = flag.Bool("verbose", false, "verbose output")                              // verbosity?
+	version        = flag.Bool("version", false, "the code version")
+	revision       = flag.Bool("revision", false, "revision and build information")
+	forceOperation = flag.Bool("force", false, "force the current operation ignoring any warnings (will still be output)")
+	config         map[string]string // the configuration map
+	tc             *http.Client      // pointer to the global token client object
+	apiClient      *dnsimple.Client  // pointer to the global API client object
+	versionString  string            = "devel"
 )
 
 // askUserYesNo takes a string and prompts the user with that string and a y/N
@@ -271,7 +280,7 @@ func dnskeyExistsInDns(qname string, keytag uint16) (dns.DNSKEY, error) {
 
 // _verbose takes a string and only outputs it if verbosity is requested via the -verbose CLI flag
 func _verbose(msgString string) {
-	if !*verbose {
+	if !*verboseOutput {
 		return
 	}
 	fmt.Printf("%s\n", msgString)
