@@ -53,12 +53,15 @@ func askUserYesNo(s string) bool {
 		os.Exit(1)
 	}
 	response = strings.ToLower(strings.TrimSpace(response))
+	_debug(fmt.Sprintf("user replied to prompt with [%s]", response))
 	if response == "y" || response == "yes" {
+		_debug("returning true")
 		return true
 	} else {
 		// you can
 		// else if response == "n" || response == "no" {
 		// and wrap in a for {} to force y or n
+		_debug("returning false")
 		return false
 	}
 }
@@ -81,13 +84,14 @@ func doQuery(qname string, qtype uint16) (*dns.Msg, error) {
 	m.SetEdns0(4096, true) // do DNSKEY (set DO, as we want AD)
 	m.SetQuestion(dns.Fqdn(qname), qtype)
 	r, rtt, err := c.Exchange(m, net.JoinHostPort(nameserverAddr, nameserverPort))
-	_verbose(fmt.Sprintf("Response received from %s:%s in %s\n", nameserverAddr, nameserverPort, rtt))
+	_verbose(fmt.Sprintf("Response received for %s/%s from %s:%s in %s", qname, dns.TypeToString[qtype], nameserverAddr, nameserverPort, rtt))
 	if err != nil {
 		_debug(fmt.Sprintf("Error: query for %s/%s resulted in error: %s", qname, dns.TypeToString[qtype], err))
 		return nil, err
 	}
 	if r == nil || r.Rcode == dns.RcodeNameError || r.Rcode == dns.RcodeSuccess {
 		_debug(fmt.Sprintf("query for %s/%s resulted in rcode %s", qname, dns.TypeToString[qtype], dns.RcodeToString[r.Rcode]))
+		_debug(fmt.Sprintf("header is:\n%+v", r.MsgHdr))
 		return r, err
 	}
 	return nil, errors.New("wibble")
@@ -101,10 +105,14 @@ func getApiClient() *dnsimple.Client {
 	if tc == nil {
 		_debug("token client does not exist, so creating it")
 		tc = dnsimple.StaticTokenHTTPClient(context.Background(), config["apiKey"])
+	} else {
+		_debug("using existing token client")
 	}
 	if apiClient == nil {
 		_debug("api client doesn't exist, so creating it")
 		apiClient = dnsimple.NewClient(tc)
+	} else {
+		_debug("using existing api client object")
 	}
 	if apiClient != nil && config["apiEndpoint"] != "" {
 		_debug(fmt.Sprintf("setting API endpoint to %s", config["apiEndpoint"]))
@@ -112,6 +120,48 @@ func getApiClient() *dnsimple.Client {
 		apiClient.BaseURL = config["apiEndpoint"]
 	}
 	return apiClient
+}
+
+// domainExistsInAccount checks in the account via the API to see if the domain exists
+// Takes one parameter, the domain to be checked
+// Returns bool indicating if the domain is in the account, and whether there were any errors performing the check
+func domainExistsInAccount(domain string) (bool, error) {
+	d, e := getDomainsInAccount(domain)
+	if e != nil {
+		_debug(fmt.Sprintf("Error: error fetching domains from API: %s", e))
+		return false, fmt.Errorf("error fetching domains from API: %s", e)
+	}
+	for _, domainRecord := range d {
+		_debug(fmt.Sprintf(" => got domain %s", domainRecord.Name))
+		if domainRecord.Name == domain {
+			return true, nil
+		}
+	}
+	return false, errors.New("lost")
+}
+
+// getDomainsInAccount retrieves a list of domains in the account
+// Takes one parameter, allowing the list to be matched to a subset
+// Returns a map of Domain objects and an error object
+func getDomainsInAccount(domain string) ([]dnsimple.Domain, error) {
+	client := getApiClient()
+	var listOptions dnsimple.DomainListOptions
+	if domain != "" {
+		_debug(fmt.Sprintf("constraining list to match [%s]", domain))
+		listOptions.NameLike = &domain
+	}
+	sortOption := "expiration:desc"
+	listOptions.ListOptions.Sort = &sortOption
+	r, err := client.Domains.ListDomains(context.Background(), config["accountNumber"], &listOptions)
+	if err != nil {
+		_debug(fmt.Sprintf("Error: error fetching domains from the API: %s", err))
+		return nil, fmt.Errorf("error fetching domains from API: %s", err)
+	}
+	_debug(fmt.Sprintf("HTTP response code was %s", r.HTTPResponse.Status))
+
+	// this is likely the first API call where we may want to add pagination handling...
+	_debug(fmt.Sprintf("we are on page %d of %d at %d per page", r.Pagination.CurrentPage, r.Pagination.TotalPages, r.Pagination.PerPage))
+	return r.Data, nil
 }
 
 // getDsFromRegistry uses the registrar API to get a list of the DS records in the registry
@@ -137,6 +187,8 @@ func listDsInRegistry(domain string) {
 		os.Exit(1)
 	}
 	switch len(dsRecords.Data) {
+	case 0:
+		fmt.Println("There are no DS records")
 	case 1:
 		fmt.Printf("There is %d DS record\n", len(dsRecords.Data))
 	default:
@@ -156,13 +208,15 @@ func listDsInRegistry(domain string) {
 // error == nil, ok bool is true => DS exists (DS will be in the DS object)
 // error != nil, ok bool is true => DS does not exist
 // error != nil, ok bool is false => an error occurred trying
-func dsExistsInRegistry(domain string, keytag uint16) (dnsimple.DelegationSignerRecord, error, bool) {
+func dsExistsInRegistry(domain string, keytag uint16) (dnsimple.DelegationSignerRecord, bool, int, error) {
 	dsRecords, err := getDsFromRegistry(domain)
 	var dsr dnsimple.DelegationSignerRecord
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: error retrieving list of keys for %s: %s\n", domain, err)
-		return dsr, errors.New(fmt.Sprintf("error retrieving list of keys: %s", err)), false
+		//		return dsr, errors.New(fmt.Sprintf("error retrieving list of keys: %s", err)), false
+		return dsr, false, 0, fmt.Errorf("error retrieving list of keys: %s", err)
 	} else {
+		dsCount := len(dsRecords.Data)
 		for _, ds := range dsRecords.Data {
 			_debug(fmt.Sprintf("got ds with keytag %s", ds.Keytag))
 			dsKeytag, err := strconv.ParseUint(ds.Keytag, 10, 16)
@@ -171,11 +225,11 @@ func dsExistsInRegistry(domain string, keytag uint16) (dnsimple.DelegationSigner
 				os.Exit(1)
 			}
 			if uint16(dsKeytag) == keytag {
-				_debug(fmt.Sprintf("DS with keytag %d exists in the registry\n", keytag))
-				return ds, nil, true
+				_debug(fmt.Sprintf("DS with keytag %d is one of %d DS records in the registry", keytag, dsCount))
+				return ds, true, dsCount, nil
 			}
 		}
-		return dsr, errors.New("DS record does not exist"), true
+		return dsr, true, dsCount, fmt.Errorf("DS record does not exist in %d DS records", dsCount)
 	}
 
 }
@@ -190,21 +244,23 @@ func getDnskeyFromDns(qname string) (map[uint16]dns.DNSKEY, error) {
 	r, err := doQuery(qname, dns.TypeDNSKEY)
 	// duplication of error checking from the doQuery function...
 	if err != nil || r == nil {
-		fmt.Fprintf(os.Stderr, "Cannot retrieve keys for %s: %s\n", qname, err)
-		os.Exit(1)
+		_debug(fmt.Sprintf("Error: annot retrieve keys for %s: %s", qname, err))
+		return nil, err
 	}
 	if r.Rcode == dns.RcodeNameError {
-		fmt.Fprintf(os.Stderr, "No such domain %s\n", qname)
-		os.Exit(1)
+		_debug(fmt.Sprintf("Error: no such domain %s", qname))
+		return nil, errors.New("no such domain")
 	}
 
 	if r.Rcode != dns.RcodeSuccess {
-		fmt.Printf("Error in query for %s/DNSKEY: %s", qname, dns.RcodeToString[r.Rcode])
-		os.Exit(1)
+		_debug(fmt.Sprintf("Error in query for %s/DNSKEY: %s", qname, dns.RcodeToString[r.Rcode]))
+		return nil, fmt.Errorf("error: %s", dns.RcodeToString[r.Rcode])
 	}
 	if !(r.Authoritative || r.AuthenticatedData) {
-		fmt.Fprintf(os.Stderr, "response is neither authoritative nor validated")
-		os.Exit(1)
+		_debug("response is neither authoritative nor validated")
+		return nil, errors.New("response is neither authoritative nor validated")
+	} else {
+		_verbose(fmt.Sprintf("Response received is authoritative [%v] or validated [%v]", r.Authoritative, r.AuthenticatedData))
 	}
 
 	// we should (prep, and) return a map of resource record objects instead of this.
@@ -233,6 +289,8 @@ func listDnskeyInDns(domain string) {
 		os.Exit(1)
 	}
 	switch len(dnskeys) {
+	case 0:
+		fmt.Println("There are no DNSKEY records")
 	case 1:
 		fmt.Printf("There is %d DNSKEY record\n", len(dnskeys))
 	default:
@@ -270,7 +328,7 @@ func dnskeyExistsInDns(qname string, keytag uint16) (dns.DNSKEY, error) {
 	} else {
 		for key := range dnskeys {
 			if key == keytag {
-				_debug(fmt.Sprintf("keytag %d exists with type %d\n", keytag, dnskeys[key].Flags))
+				_debug(fmt.Sprintf("keytag %d exists with type %d", keytag, dnskeys[key].Flags))
 				return dnskeys[key], nil
 			}
 		}
@@ -325,37 +383,37 @@ func parseConfigurationFile(file string) (*configparser.ConfigParser, []error) {
 		fmt.Fprintf(os.Stderr, "Error: no API key in the config file\n")
 		errs = append(errs, errors.New("no API key in the config file"))
 	} else {
-		_verbose("API key set from configuration")
+		_debug("API key set from configuration")
 	}
 	config["accountNumber"], err = p.Get("account", "number")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: no account number in the config file\n")
 		errs = append(errs, errors.New("no account number in the config file"))
 	} else {
-		_verbose(fmt.Sprintf("account number set to %s from configuration", config["accountNumber"]))
+		_debug(fmt.Sprintf("Account number set to %s from configuration", config["accountNumber"]))
 	}
 
 	// optionals, with fallback defaults
 	config["nameserverAddr"], err = p.Get("nameserver", "address")
 	if err != nil || config["nameserverAddr"] == "" {
-		_verbose("no nameserver address in configuration; defaulting to 127.0.0.1")
+		_debug("no nameserver address in configuration; defaulting to 127.0.0.1")
 		config["nameserverAddr"] = "127.0.0.1"
 	} else {
-		_verbose(fmt.Sprintf("nameserver address set to %s from configuration", config["nameserverAddr"]))
+		_debug(fmt.Sprintf("nameserver address set to %s from configuration", config["nameserverAddr"]))
 	}
 	config["nameserverPort"], err = p.Get("nameserver", "port")
 	if err != nil || config["nameserverPort"] == "" {
-		_verbose("no nameserver port in configuration; defaulting to 53")
+		_debug("no nameserver port in configuration; defaulting to 53")
 		config["nameserverPort"] = "53"
 	} else {
-		_verbose(fmt.Sprintf("nameserver port set to %s from configuration", config["nameserverPort"]))
+		_debug(fmt.Sprintf("nameserver port set to %s from configuration", config["nameserverPort"]))
 	}
 	config["dsDigestType"], err = p.Get("ds", "digest_type")
 	if err != nil || config["dsDigestType"] == "" {
-		_verbose("no DS record digest type in configuration; defaulting to 2 (SHA-256)")
+		_debug("no DS record digest type in configuration; defaulting to 2 (SHA-256)")
 		config["dsDigestType"] = "2"
 	} else {
-		_verbose(fmt.Sprintf("DS records digest type set to %d from configuration", config["dsDigestType"]))
+		_debug(fmt.Sprintf("DS records digest type set to %s from configuration", config["dsDigestType"]))
 	}
 	// optional, where fallback defaults are baked in
 	// for example, if you don't specify the endpoint, it'll default to prod

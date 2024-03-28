@@ -39,6 +39,12 @@ This behaviour can be overridden and the operation forced with the -force flag.
 
 The DS record will then be created from the DNSKEY and submitted to the API.
 
+If the DS is being deleted, and is the last DS record, the user will be warned,
+as this will result in the domain becoming insecure due to the chain of trust
+being broken.
+
+Again, this behaviour can be overridden with the -force flag
+
 ## Caveats
 
 My first go at go. No pun intended. Might be awful. Might indeed eat your cat.
