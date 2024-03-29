@@ -54,7 +54,7 @@ func main() {
 		if !ok {
 			panic("not ok reading build info!")
 		}
-		fmt.Printf("%s version information:\ncommit: %s\n%+v\n", os.Args[0], versionString, bi)
+		fmt.Printf("%s version information:\ncommit %s\n%+v\n", os.Args[0], versionString, bi)
 		return
 	}
 
@@ -63,7 +63,7 @@ func main() {
 		return
 	}
 
-	config = make(map[string]string)
+	//config = make(map[string]string)
 
 	// variables scoped to the main function
 	var (
@@ -125,10 +125,10 @@ func main() {
 	// check the domain is in the account first
 	_, err := domainExistsInAccount(domain)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: domain %s does not exist in this account (%s)\n", domain, config["accountNumber"])
+		fmt.Fprintf(os.Stderr, "Error: domain %s does not exist in this account (%s)\n", domain, config.accountNumber)
 		os.Exit(1)
 	} else {
-		_debug(fmt.Sprintf("domain %s exists in account (%s)", domain, config["accountNumber"]))
+		_debug(fmt.Sprintf("domain %s exists in account (%s)", domain, config.accountNumber))
 	}
 
 	// work out what action we're performing
@@ -238,14 +238,8 @@ func main() {
 				}
 
 				// we've done all the checks, create and add the DS
-				digestType, err := strconv.ParseUint(config["dsDigestType"], 10, 8)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error: error converting string digest type (%s) to integer value\n", config["dsDigestType"])
-					_debug(fmt.Sprintf("Error: converting the digest type (%s) to an integer resulted in error: %s", config["dsDigestType"], err))
-					os.Exit(1)
-				}
-				_verbose(fmt.Sprintf("Creating DS record witih digest type %s from DNSKEY record", dns.HashToString[uint8(digestType)]))
-				dsRr := dnskeyRr.ToDS(uint8(digestType))
+				_verbose(fmt.Sprintf("Creating DS record witih digest type %s from DNSKEY record", dns.HashToString[config.dsDigestType]))
+				dsRr := dnskeyRr.ToDS(config.dsDigestType)
 				_debug(fmt.Sprintf("DS record created: DS %d %d %d %s", dsRr.KeyTag, dsRr.Algorithm, dsRr.DigestType, dsRr.Digest))
 
 				var delegationSigner dnsimple.DelegationSignerRecord
@@ -254,7 +248,7 @@ func main() {
 				delegationSigner.DigestType = strconv.FormatUint(uint64(dsRr.DigestType), 10)
 				delegationSigner.Digest = dsRr.Digest
 				client := getApiClient()
-				dsResponse, err := client.Domains.CreateDelegationSignerRecord(context.Background(), config["accountNumber"], domain, delegationSigner)
+				dsResponse, err := client.Domains.CreateDelegationSignerRecord(context.Background(), config.accountNumber, domain, delegationSigner)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Error: error creating DS record in the registry: %s\n", err)
 					os.Exit(1)
@@ -288,7 +282,7 @@ func main() {
 
 				// delete the DS
 				client := getApiClient()
-				_, err := client.Domains.DeleteDelegationSignerRecord(context.Background(), config["accountNumber"], domain, dsR.ID)
+				_, err := client.Domains.DeleteDelegationSignerRecord(context.Background(), config.accountNumber, domain, dsR.ID)
 				if err == nil {
 					fmt.Printf("DS record with keytag %d and ID %d in domain %s deleted", keytag, dsR.ID, domain)
 				} else {

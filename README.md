@@ -9,6 +9,8 @@ perl scripts in go as an opportunity to learn go.
 So far, there are the following examples:
 
 * dnsimple-ds
+* dnsimple-ns
+* dnsimple-domain
 
 ## Scripts
 
@@ -33,6 +35,11 @@ Further checks will then be carried out in order to warn the user if:
 * The requested key is a Zone Signing Key instead of a Key Signing Key
 * The requested key is not being used to sign the DNSKEY record set
 
+If the key is not being used to sign the DNSKEY record set, checks are made to
+confirm if the key is the same algorithm as existing DS records. This is not
+exhaustive, and depending on the other published DS records, may still cause
+issues if published.
+
 The user is prompted, if there are warnings, to see if they want to proceed.
 
 This behaviour can be overridden and the operation forced with the -force flag.
@@ -44,6 +51,19 @@ as this will result in the domain becoming insecure due to the chain of trust
 being broken.
 
 Again, this behaviour can be overridden with the -force flag
+
+### dnsimple-ns
+
+dnsimple-ns will eventually facilitate the manipulation of NS records in the 
+domain delegation, as well as (hopefully) glue records. API doesn't support
+these as yet.
+
+### dnsimple-domain
+
+dnsimple-domain facilitates domain actions; initially just listing the domains
+in the account, and checking whether a domain is available to register.
+
+Will eventually support registration and renewal.
 
 ## Caveats
 
