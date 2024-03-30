@@ -2,9 +2,9 @@
 
 ## Introduction
 
-After writing the perl module and scripts (see other repo) I decided that as
-DNS Simple offer a go library, I would use it as an excuse to duplicate the
-perl scripts in go as an opportunity to learn go.
+After writing the perl module and scripts (see [repo](https://bitbucket.org/karldyson/dnsimple)) I decided that as
+DNS Simple offer a Go library, I would use it as an excuse to duplicate the
+perl scripts as an opportunity to learn Go.
 
 So far, there are the following examples:
 

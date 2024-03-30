@@ -7,13 +7,6 @@ Copyright (c) 2024 Karl Dyson.
 All rights reserved.
 
 TODO (no particular order):
-* Add some annotation and/or docs
-* Add a license, copyright, etc
-* getApiClient feels a bit light on error catching and handling...
-* getDnskeyFromDns feels like its duplicating a lot of the RCODE checking from doQuery...?
-  double check, but mindful of whether everything expects an answer as opposed to delegation etc?
-* still feels like we're a bit muddy on the difference between verbose and debug output...
-* methods should mostly return errors rather than exiting... main() may want the option to handle it and carry on regardless
 
 */
 

@@ -3,6 +3,17 @@
 Copyright (c) 2024 Karl Dyson.
 All rights reserved.
 
+* Add some annotation and/or docs
+* Add a license, copyright, etc
+* getApiClient feels a bit light on error catching and handling...
+* getDnskeyFromDns feels like its duplicating a lot of the RCODE checking from doQuery...?
+  double check, but mindful of whether everything expects an answer as opposed to delegation etc?
+* still feels like we're a bit muddy on the difference between verbose and debug output...
+* methods should mostly return errors rather than exiting... main() may want the option to handle it and carry on regardless
+* methods should return brief errors, as we have a bunch of things just build on build on.
+  debug and/or log, and return just the error, which the calling function or code can deal with and/or display
+* deal with pagination in API calls...
+
 */
 
 package main
@@ -19,6 +30,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bigkevmcd/go-configparser"
 	"github.com/dnsimple/dnsimple-go/dnsimple"
@@ -42,11 +54,10 @@ var (
 	version        = flag.Bool("version", false, "the code version")
 	revision       = flag.Bool("revision", false, "revision and build information")
 	forceOperation = flag.Bool("force", false, "force the current operation ignoring any warnings (will still be output)")
-	//config         map[string]string // the configuration map
-	config        configuration
-	tc            *http.Client     // pointer to the global token client object
-	apiClient     *dnsimple.Client // pointer to the global API client object
-	versionString string           = "devel"
+	config         configuration
+	tc             *http.Client     // pointer to the global token client object
+	apiClient      *dnsimple.Client // pointer to the global API client object
+	versionString  string           = "devel"
 )
 
 // askUserYesNo takes a string and prompts the user with that string and a y/N
@@ -101,7 +112,7 @@ func doQuery(qname string, qtype uint16) (*dns.Msg, error) {
 		_debug(fmt.Sprintf("header is:\n%+v", r.MsgHdr))
 		return r, err
 	}
-	return nil, errors.New("wibble")
+	return nil, fmt.Errorf("rcode: %s", dns.RcodeToString[r.Rcode])
 }
 
 // getApiClient either creates or passes back an existing globel client object
@@ -178,34 +189,55 @@ func listDomainsInAccount() {
 		fmt.Fprintf(os.Stderr, "Error: error fetching domains from API: %s", e)
 		os.Exit(1)
 	}
+	strwidth := 0
+	for _, dr := range d {
+		if len(dr.Name) > strwidth {
+			strwidth = len(dr.Name)
+		}
+	}
 	for _, dR := range d {
-		fmt.Printf("  => %20s; expiry: %s\n", dR.Name, dR.ExpiresAt)
+
+		now := time.Now()
+		var days float64
+		var dayStr string
+		tt, err := time.Parse(time.RFC3339, dR.ExpiresAt)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to parse expiry date (%s): %s\n", dR.ExpiresAt, err)
+			dayStr = ""
+		} else {
+			days = tt.Sub(now).Hours() / 24
+			dayStr = fmt.Sprintf("(%d days)", int(days))
+		}
+
+		name := dR.Name + strings.Repeat(".", (strwidth-len(dR.Name)))
+		fmt.Printf("  => %-*s; expiry: %s %s\n", strwidth, name, dR.ExpiresAt, dayStr)
 	}
 }
 
 // checkDomainStatus checks with a domain is available to be registered and whether it's a premium domain
 // takes one parameter, the domain to be queried
 // returns two parameters; boolean on whether the domain is available, and error if encountered
-// the output should likely be moved to the main() in the relevant script to deal with
-func checkDomainStatus(domain string) (bool, error) {
+func checkDomainStatus(domain string) (*dnsimple.DomainCheckResponse, error) {
 	client := getApiClient()
 	r, e := client.Registrar.CheckDomain(context.Background(), config.accountNumber, domain)
 	if e != nil {
-		return false, fmt.Errorf("error checking status of domain %s: %s", domain, e)
+		return nil, fmt.Errorf("error checking status of domain %s: %s", domain, e)
 	}
-	switch r.Data.Available {
-	case true:
-		fmt.Printf("%s is available", domain)
-	case false:
-		fmt.Printf("%s is NOT available", domain)
-	}
-	switch r.Data.Premium {
-	case true:
-		fmt.Printf(" (and is a premium domain)")
-	}
-	fmt.Println()
 	_debug(fmt.Sprintf("%+v", r.Data))
-	return true, nil
+	return r, nil
+}
+
+// getDomainPrice fetches the prices applicable to the domain
+// takes one parameter, that being the domain to be checked
+// returns a DomainPriceResponse object and an error object
+func getDomainPrice(domain string) (*dnsimple.DomainPriceResponse, error) {
+	client := getApiClient()
+	p, e := client.Registrar.GetDomainPrices(context.Background(), config.accountNumber, domain)
+	if e != nil {
+		return nil, fmt.Errorf("error checking price of domain %s: %s", domain, e)
+	}
+	_debug(fmt.Sprintf("%+v", p.Data))
+	return p, nil
 }
 
 // getNsFromRegistry uses the registrar API to get a list of the NS records in the registry
@@ -274,7 +306,7 @@ func listDsInRegistry(domain string) {
 		fmt.Printf("There are %d DS records\n", len(dsRecords.Data))
 	}
 	for _, ds := range dsRecords.Data {
-		fmt.Printf("  => DS %s %s %s %s\n", ds.Keytag, ds.Algorithm, ds.DigestType, ds.Digest)
+		fmt.Printf("  => DS %5s %s %s %s\n", ds.Keytag, ds.Algorithm, ds.DigestType, ds.Digest)
 	}
 }
 
@@ -292,7 +324,6 @@ func dsExistsInRegistry(domain string, keytag uint16) (dnsimple.DelegationSigner
 	var dsr dnsimple.DelegationSignerRecord
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: error retrieving list of keys for %s: %s\n", domain, err)
-		//		return dsr, errors.New(fmt.Sprintf("error retrieving list of keys: %s", err)), false
 		return dsr, false, 0, fmt.Errorf("error retrieving list of keys: %s", err)
 	} else {
 		dsCount := len(dsRecords.Data)
@@ -323,7 +354,7 @@ func getDnskeyFromDns(qname string) (map[uint16]dns.DNSKEY, error) {
 	r, err := doQuery(qname, dns.TypeDNSKEY)
 	// duplication of error checking from the doQuery function...
 	if err != nil || r == nil {
-		_debug(fmt.Sprintf("Error: annot retrieve keys for %s: %s", qname, err))
+		_debug(fmt.Sprintf("Error: cannot retrieve keys for %s: %s", qname, err))
 		return nil, err
 	}
 	if r.Rcode == dns.RcodeNameError {
@@ -342,7 +373,6 @@ func getDnskeyFromDns(qname string) (map[uint16]dns.DNSKEY, error) {
 		_verbose(fmt.Sprintf("Response received is authoritative [%v] or validated [%v]", r.Authoritative, r.AuthenticatedData))
 	}
 
-	// we should (prep, and) return a map of resource record objects instead of this.
 	dnskeys := make(map[uint16]dns.DNSKEY)
 	for _, ans := range r.Answer {
 		switch rr := ans.(type) {

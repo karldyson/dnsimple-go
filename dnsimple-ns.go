@@ -88,7 +88,7 @@ func main() {
 	}
 
 	// some debug to clarify the options we are operating with...
-	_debug(fmt.Sprintf("domain: %s, action: %s\n", domain, action))
+	_debug(fmt.Sprintf("domain: %s, action: %s", domain, action))
 
 	// check the domain is in the account first
 	_, err := domainExistsInAccount(domain)

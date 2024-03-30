@@ -90,7 +90,7 @@ func main() {
 	}
 
 	// some debug to clarify the options we are operating with...
-	_debug(fmt.Sprintf("domain: %s, action: %s\n", domain, action))
+	_debug(fmt.Sprintf("domain: %s, action: %s", domain, action))
 
 	switch action {
 	case "list":
@@ -102,7 +102,25 @@ func main() {
 			flag.Usage()
 			os.Exit(1)
 		}
-		checkDomainStatus(domain)
+		r, err := checkDomainStatus(domain)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: error checking status of domain %s: %s\n", domain, err)
+		}
+		switch r.Data.Available {
+		case true:
+			p, err := getDomainPrice(domain)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: error checking pricing details for domain %s: %s\n", domain, err)
+			}
+			fmt.Printf("%s is available to register at £%.2f", domain, p.Data.RegistrationPrice)
+		case false:
+			fmt.Printf("%s is NOT available to register", domain)
+		}
+		switch r.Data.Premium {
+		case true:
+			fmt.Printf(" (and is a premium domain)")
+		}
+		fmt.Println()
 	case "register", "renew":
 		fmt.Println("action not yet implemented")
 		return
