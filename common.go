@@ -214,6 +214,101 @@ func listDomainsInAccount() {
 	}
 }
 
+// getContactsInAccount fetches the contacts from the account
+// returns a map of contact objects and an error object
+func getContactsInAccount() ([]dnsimple.Contact, error) {
+	client := getApiClient()
+	r, e := client.Contacts.ListContacts(context.Background(), config.accountNumber, nil)
+	if e != nil {
+		_debug(fmt.Sprintf("Error: error fetching contacts from the API: %s", e))
+		return nil, fmt.Errorf("error fetching contacts from API: %s", e)
+	}
+	_debug(fmt.Sprintf("HTTP response code was %s", r.HTTPResponse.Status))
+	return r.Data, nil
+}
+
+func listContactsInAccount() {
+	c, e := getContactsInAccount()
+	if e != nil {
+		fmt.Fprintf(os.Stderr, "Error: error fetching domains from API: %s", e)
+		os.Exit(1)
+	}
+	for _, cd := range c {
+		fmt.Printf("%d : %s %s\n", cd.ID, cd.FirstName, cd.LastName)
+	}
+}
+
+// getContactDetails fetches the details of a single contact
+// takes the contact ID name as a parameter
+// returns the contact's object and an error object
+func getContactDetails(contact int64) (*dnsimple.Contact, error) {
+	client := getApiClient()
+	r, e := client.Contacts.GetContact(context.Background(), config.accountNumber, contact)
+	if e != nil {
+		_debug(fmt.Sprintf("Error: error fetching contact details from the API: %s", e))
+		return nil, fmt.Errorf("error fetching contact details from API: %s", e)
+	}
+	_debug(fmt.Sprintf("HTTP response code was %s", r.HTTPResponse.Status))
+	return r.Data, nil
+}
+
+// listContactDetails takes a contact object and outputs pretty details for it
+// not that unlike some of the other list functions, it doesn't fetch, so you need
+// to use the related get function and then call this with the object you want listed
+func listContactDetails(c *dnsimple.Contact) {
+	fmt.Printf("ID...........: %d\n", c.ID)
+	fmt.Printf("Account ID...: %d\n", c.AccountID)
+	fmt.Printf("Label........: %s\n", c.Label)
+	fmt.Printf("First Name...: %s\n", c.FirstName)
+	fmt.Printf("Last Name....: %s\n", c.LastName)
+	fmt.Printf("Job Title....: %s\n", c.JobTitle)
+	fmt.Printf("Organisation.: %s\n", c.Organization)
+	fmt.Printf("Address1.....: %s\n", c.Address1)
+	fmt.Printf("Address2.....: %s\n", c.Address2)
+	fmt.Printf("City.........: %s\n", c.City)
+	fmt.Printf("State........: %s\n", c.StateProvince)
+	fmt.Printf("Postal Code..: %s\n", c.PostalCode)
+	fmt.Printf("Country......: %s\n", c.Country)
+	fmt.Printf("Phone........: %s\n", c.Phone)
+	fmt.Printf("Fax..........: %s\n", c.Fax)
+	fmt.Printf("E-mail.......: %s\n", c.Email)
+	fmt.Printf("Created At...: %s\n", c.CreatedAt)
+	fmt.Printf("Updated At...: %s\n", c.UpdatedAt)
+
+}
+
+// getDomainDetails fetches the details of a single domain
+// takes the domain name as a parameter
+// returns the domain's object and an error object
+func getDomainDetails(domain string) (*dnsimple.Domain, error) {
+	client := getApiClient()
+	r, e := client.Domains.GetDomain(context.Background(), config.accountNumber, domain)
+	if e != nil {
+		_debug(fmt.Sprintf("Error: error fetching domain details from the API: %s", e))
+		return nil, fmt.Errorf("error fetching domain details from API: %s", e)
+	}
+	_debug(fmt.Sprintf("HTTP response code was %s", r.HTTPResponse.Status))
+	return r.Data, nil
+}
+
+// listDomainDetails takes a domain object and outputs pretty details for it
+// not that unlike some of the other list functions, it doesn't fetch, so you need
+// to use the related get function and then call this with the object you want listed
+func listDomainDetails(d *dnsimple.Domain) {
+	fmt.Printf("ID...........: %d\n", d.ID)
+	fmt.Printf("Account ID...: %d\n", d.AccountID)
+	fmt.Printf("Registrant ID: %d\n", d.RegistrantID)
+	fmt.Printf("Name.........: %s\n", d.Name)
+	fmt.Printf("Unicode Name.: %s\n", d.UnicodeName)
+	fmt.Printf("Token........: %s\n", d.Token)
+	fmt.Printf("State........: %s\n", d.State)
+	fmt.Printf("Auto Renew...: %v\n", d.AutoRenew)
+	fmt.Printf("Private Whois: %v\n", d.PrivateWhois)
+	fmt.Printf("Expires At...: %s\n", d.ExpiresAt)
+	fmt.Printf("Created At...: %s\n", d.CreatedAt)
+	fmt.Printf("Updated At...: %s\n", d.UpdatedAt)
+}
+
 // checkDomainStatus checks with a domain is available to be registered and whether it's a premium domain
 // takes one parameter, the domain to be queried
 // returns two parameters; boolean on whether the domain is available, and error if encountered
