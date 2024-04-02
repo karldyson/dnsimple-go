@@ -94,8 +94,23 @@ func main() {
 
 	switch action {
 	case "list":
-		fmt.Printf("Listing domains in account %s:\n", config.accountNumber)
-		listDomainsInAccount()
+		if domain == "" {
+			fmt.Printf("Listing domains in account %s:\n", config.accountNumber)
+			listDomainsInAccount()
+		} else {
+			fmt.Printf("Listing details for domain %s:\n", domain)
+			d, e := getDomainDetails(domain)
+			if e != nil {
+				fmt.Fprintf(os.Stderr, "Error: error fetching domain details: %s\n", e)
+			}
+			listDomainDetails(d)
+			fmt.Printf("Listing registrant details for domain %s:\n", domain)
+			c, e := getContactDetails(d.RegistrantID)
+			if e != nil {
+				fmt.Fprintf(os.Stderr, "Error: error fetching contact details: %s\n", e)
+			}
+			listContactDetails(c)
+		}
 	case "check":
 		if domain == "" {
 			fmt.Fprintf(os.Stderr, "Error: a domain must be passed in\n")
