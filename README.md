@@ -11,6 +11,7 @@ So far, there are the following examples:
 * dnsimple-ds
 * dnsimple-ns
 * dnsimple-domain
+* dnsimple-contact
 
 ## Scripts
 
@@ -63,7 +64,20 @@ these as yet.
 dnsimple-domain facilitates domain actions; initially just listing the domains
 in the account, and checking whether a domain is available to register.
 
+If listing, and given a domain name, will list the details of the domain as
+well as the details of the associated registrant.
+
 Will eventually support registration and renewal.
+
+### dnsimple-contact
+
+dnsimple-contact facilitates contact actions; initially just listing those
+in the account.
+
+If listing, and given a contact's ID (from the list output), will list the
+details of the contact.
+
+Will eventually support creation and deletion of contacts.
 
 ## Caveats
 
