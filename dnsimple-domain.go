@@ -8,7 +8,11 @@ All rights reserved.
 
 TODO (no particular order):
 * add register functionality
+  * should present a list of contacts and prompt for a contact ID
+  * if only one contact found, offer it as a default
+  * registering a domain should pause last thing before actual registration to confirm the details on screen to the user
 * add renewal functionality
+  * offer the user an opportunity (cli flag?) for period to renew for, default to a year
 
 */
 
@@ -104,6 +108,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Error: error fetching domain details: %s\n", e)
 			}
 			listDomainDetails(d)
+			fmt.Println()
 			fmt.Printf("Listing registrant details for domain %s:\n", domain)
 			c, e := getContactDetails(d.RegistrantID)
 			if e != nil {

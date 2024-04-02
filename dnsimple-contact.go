@@ -9,6 +9,7 @@ All rights reserved.
 TODO (no particular order):
 * Add creation
 * Add deletion
+* better handling of errors if passed a non-number as a contact ID
 
 */
 
@@ -105,6 +106,7 @@ func main() {
 			c, e := getContactDetails(contactInt)
 			if e != nil {
 				fmt.Fprintf(os.Stderr, "Error: error fetching contact details: %s\n", e)
+				os.Exit(1)
 			}
 			listContactDetails(c)
 		}

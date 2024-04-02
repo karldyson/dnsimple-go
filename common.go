@@ -13,6 +13,7 @@ All rights reserved.
 * methods should return brief errors, as we have a bunch of things just build on build on.
   debug and/or log, and return just the error, which the calling function or code can deal with and/or display
 * deal with pagination in API calls...
+* add a function to check if a contact exists in the account
 
 */
 
@@ -196,22 +197,31 @@ func listDomainsInAccount() {
 		}
 	}
 	for _, dR := range d {
-
-		now := time.Now()
-		var days float64
-		var dayStr string
-		tt, err := time.Parse(time.RFC3339, dR.ExpiresAt)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to parse expiry date (%s): %s\n", dR.ExpiresAt, err)
-			dayStr = ""
-		} else {
-			days = tt.Sub(now).Hours() / 24
-			dayStr = fmt.Sprintf("(%d days)", int(days))
-		}
-
 		name := dR.Name + strings.Repeat(".", (strwidth-len(dR.Name)))
-		fmt.Printf("  => %-*s; expiry: %s %s\n", strwidth, name, dR.ExpiresAt, dayStr)
+		fmt.Printf("  => %-*s; expiry: %s %s\n", strwidth, name, dR.ExpiresAt, daysToString(dR.ExpiresAt))
 	}
+}
+
+func daysToString(d string) string {
+	var dayStr string
+	days, err := dateToDaysFromNow(d)
+	if err != nil {
+		_debug(fmt.Sprintf("Warning: failed to parse expiry date (%s): %s", d, err))
+		dayStr = ""
+	} else {
+		dayStr = fmt.Sprintf("(%d days)", days)
+	}
+	return dayStr
+}
+
+func dateToDaysFromNow(d string) (int, error) {
+	tt, err := time.Parse(time.RFC3339, d)
+	if err != nil {
+		_debug(fmt.Sprintf("Error: failed to parse date (%s): %s", d, err))
+		return 0, fmt.Errorf("failed to parse date (%s): %s", d, err)
+	}
+	days := tt.Sub(time.Now()).Hours() / 24
+	return int(days), nil
 }
 
 // getContactsInAccount fetches the contacts from the account
@@ -256,24 +266,24 @@ func getContactDetails(contact int64) (*dnsimple.Contact, error) {
 // not that unlike some of the other list functions, it doesn't fetch, so you need
 // to use the related get function and then call this with the object you want listed
 func listContactDetails(c *dnsimple.Contact) {
-	fmt.Printf("ID...........: %d\n", c.ID)
-	fmt.Printf("Account ID...: %d\n", c.AccountID)
-	fmt.Printf("Label........: %s\n", c.Label)
-	fmt.Printf("First Name...: %s\n", c.FirstName)
-	fmt.Printf("Last Name....: %s\n", c.LastName)
-	fmt.Printf("Job Title....: %s\n", c.JobTitle)
-	fmt.Printf("Organisation.: %s\n", c.Organization)
-	fmt.Printf("Address1.....: %s\n", c.Address1)
-	fmt.Printf("Address2.....: %s\n", c.Address2)
-	fmt.Printf("City.........: %s\n", c.City)
-	fmt.Printf("State........: %s\n", c.StateProvince)
-	fmt.Printf("Postal Code..: %s\n", c.PostalCode)
-	fmt.Printf("Country......: %s\n", c.Country)
-	fmt.Printf("Phone........: %s\n", c.Phone)
-	fmt.Printf("Fax..........: %s\n", c.Fax)
-	fmt.Printf("E-mail.......: %s\n", c.Email)
-	fmt.Printf("Created At...: %s\n", c.CreatedAt)
-	fmt.Printf("Updated At...: %s\n", c.UpdatedAt)
+	fmt.Printf("\tID...........: %d\n", c.ID)
+	fmt.Printf("\tAccount ID...: %d\n", c.AccountID)
+	fmt.Printf("\tLabel........: %s\n", c.Label)
+	fmt.Printf("\tFirst Name...: %s\n", c.FirstName)
+	fmt.Printf("\tLast Name....: %s\n", c.LastName)
+	fmt.Printf("\tJob Title....: %s\n", c.JobTitle)
+	fmt.Printf("\tOrganisation.: %s\n", c.Organization)
+	fmt.Printf("\tAddress1.....: %s\n", c.Address1)
+	fmt.Printf("\tAddress2.....: %s\n", c.Address2)
+	fmt.Printf("\tCity.........: %s\n", c.City)
+	fmt.Printf("\tState........: %s\n", c.StateProvince)
+	fmt.Printf("\tPostal Code..: %s\n", c.PostalCode)
+	fmt.Printf("\tCountry......: %s\n", c.Country)
+	fmt.Printf("\tPhone........: %s\n", c.Phone)
+	fmt.Printf("\tFax..........: %s\n", c.Fax)
+	fmt.Printf("\tE-mail.......: %s\n", c.Email)
+	fmt.Printf("\tCreated At...: %s\n", c.CreatedAt)
+	fmt.Printf("\tUpdated At...: %s\n", c.UpdatedAt)
 
 }
 
@@ -295,18 +305,18 @@ func getDomainDetails(domain string) (*dnsimple.Domain, error) {
 // not that unlike some of the other list functions, it doesn't fetch, so you need
 // to use the related get function and then call this with the object you want listed
 func listDomainDetails(d *dnsimple.Domain) {
-	fmt.Printf("ID...........: %d\n", d.ID)
-	fmt.Printf("Account ID...: %d\n", d.AccountID)
-	fmt.Printf("Registrant ID: %d\n", d.RegistrantID)
-	fmt.Printf("Name.........: %s\n", d.Name)
-	fmt.Printf("Unicode Name.: %s\n", d.UnicodeName)
-	fmt.Printf("Token........: %s\n", d.Token)
-	fmt.Printf("State........: %s\n", d.State)
-	fmt.Printf("Auto Renew...: %v\n", d.AutoRenew)
-	fmt.Printf("Private Whois: %v\n", d.PrivateWhois)
-	fmt.Printf("Expires At...: %s\n", d.ExpiresAt)
-	fmt.Printf("Created At...: %s\n", d.CreatedAt)
-	fmt.Printf("Updated At...: %s\n", d.UpdatedAt)
+	fmt.Printf("\tID...........: %d\n", d.ID)
+	fmt.Printf("\tAccount ID...: %d\n", d.AccountID)
+	fmt.Printf("\tRegistrant ID: %d\n", d.RegistrantID)
+	fmt.Printf("\tName.........: %s\n", d.Name)
+	fmt.Printf("\tUnicode Name.: %s\n", d.UnicodeName)
+	fmt.Printf("\tToken........: %s\n", d.Token)
+	fmt.Printf("\tState........: %s\n", d.State)
+	fmt.Printf("\tAuto Renew...: %v\n", d.AutoRenew)
+	fmt.Printf("\tPrivate Whois: %v\n", d.PrivateWhois)
+	fmt.Printf("\tExpires At...: %s %s\n", d.ExpiresAt, daysToString(d.ExpiresAt))
+	fmt.Printf("\tCreated At...: %s\n", d.CreatedAt)
+	fmt.Printf("\tUpdated At...: %s\n", d.UpdatedAt)
 }
 
 // checkDomainStatus checks with a domain is available to be registered and whether it's a premium domain
