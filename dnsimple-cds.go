@@ -129,8 +129,14 @@ func main() {
 			d = append(d, domain.Name)
 		}
 		sort.Strings(d)
+		domainCount := len(d)
+		domainLoopItem := 1
 		for _, domain := range d {
 			checkCDSvsDS(domain, dryrun)
+			if domainLoopItem < domainCount {
+				fmt.Println()
+			}
+			domainLoopItem++
 		}
 	} else {
 		_, err := domainExistsInAccount(domain)
