@@ -45,6 +45,7 @@ type configuration struct {
 	nameserverPort string
 	dsDigestType   uint8
 	apiEndpoint    string
+	defaultContact int
 }
 
 // global variable declarations
@@ -550,6 +551,106 @@ func dnskeyExistsInDns(qname string, keytag uint16) (dns.DNSKEY, error) {
 	}
 }
 
+// getCdsFromDns looks up CDS records in DNS
+// It takes one parameter, the domain to be queried
+// It returns a map of CDSs indexed by keytag and an error object
+// It expects the query to be done with RD and DO and that the response returned to it
+// is either authoritative (AA) or validated (AD) - you should trust the validator if the latter!
+func getCdsFromDns(qname string) (map[uint16]dns.CDS, error) {
+
+	r, err := doQuery(qname, dns.TypeCDS)
+	// duplication of error checking from the doQuery function...
+	if err != nil || r == nil {
+		_debug(fmt.Sprintf("Error: cannot retrieve keys for %s: %s", qname, err))
+		return nil, err
+	}
+	if r.Rcode == dns.RcodeNameError {
+		_debug(fmt.Sprintf("Error: no such domain %s", qname))
+		return nil, errors.New("no such domain")
+	}
+
+	if r.Rcode != dns.RcodeSuccess {
+		_debug(fmt.Sprintf("Error in query for %s/CDS: %s", qname, dns.RcodeToString[r.Rcode]))
+		return nil, fmt.Errorf("error: %s", dns.RcodeToString[r.Rcode])
+	}
+
+	if r.Rcode == dns.RcodeSuccess && len(r.Answer) == 0 {
+		_debug("nodata response")
+		return nil, nil
+	}
+
+	if !(r.Authoritative || r.AuthenticatedData) {
+		_debug("response is neither authoritative nor validated")
+		return nil, errors.New("response is neither authoritative nor validated")
+	} else {
+		_verbose(fmt.Sprintf("Response received is authoritative [%v] or validated [%v]", r.Authoritative, r.AuthenticatedData))
+	}
+
+	rrs := make(map[uint16]dns.CDS)
+	for _, ans := range r.Answer {
+		switch rr := ans.(type) {
+		case *dns.CDS:
+			_debug(fmt.Sprintf("got CDS with keytag %d", rr.KeyTag))
+			rrs[rr.KeyTag] = *rr
+		}
+	}
+	if len(rrs) > 0 {
+		return rrs, nil
+	} else {
+		return nil, errors.New("no CDS found in DNS")
+	}
+}
+
+// getDsFromDns looks up DS records in DNS
+// It takes one parameter, the domain to be queried
+// It returns a map of DSs indexed by keytag and an error object
+// It expects the query to be done with RD and DO and that the response returned to it
+// is either authoritative (AA) or validated (AD) - you should trust the validator if the latter!
+func getDsFromDns(qname string) (map[uint16]dns.DS, error) {
+
+	r, err := doQuery(qname, dns.TypeDS)
+	// duplication of error checking from the doQuery function...
+	if err != nil || r == nil {
+		_debug(fmt.Sprintf("Error: cannot retrieve keys for %s: %s", qname, err))
+		return nil, err
+	}
+	if r.Rcode == dns.RcodeNameError {
+		_debug(fmt.Sprintf("Error: no such domain %s", qname))
+		return nil, errors.New("no such domain")
+	}
+
+	if r.Rcode != dns.RcodeSuccess {
+		_debug(fmt.Sprintf("Error in query for %s/DS: %s", qname, dns.RcodeToString[r.Rcode]))
+		return nil, fmt.Errorf("error: %s", dns.RcodeToString[r.Rcode])
+	}
+
+	if r.Rcode == dns.RcodeSuccess && len(r.Answer) == 0 {
+		_debug("nodata response")
+		return nil, nil
+	}
+
+	if !(r.Authoritative || r.AuthenticatedData) {
+		_debug("response is neither authoritative nor validated")
+		return nil, errors.New("response is neither authoritative nor validated")
+	} else {
+		_verbose(fmt.Sprintf("Response received is authoritative [%v] or validated [%v]", r.Authoritative, r.AuthenticatedData))
+	}
+
+	rrs := make(map[uint16]dns.DS)
+	for _, ans := range r.Answer {
+		switch rr := ans.(type) {
+		case *dns.DS:
+			_debug(fmt.Sprintf("got DS with keytag %d", rr.KeyTag))
+			rrs[rr.KeyTag] = *rr
+		}
+	}
+	if len(rrs) > 0 {
+		return rrs, nil
+	} else {
+		return nil, errors.New("no DS found in DNS")
+	}
+}
+
 // _verbose takes a string and only outputs it if verbosity is requested via the -verbose CLI flag
 func _verbose(msgString string) {
 	if !*verboseOutput {
@@ -585,8 +686,8 @@ func parseConfigurationFile(file string) (*configparser.ConfigParser, []error) {
 	p, err := configparser.NewConfigParserFromFile(file)
 	var errs []error
 	if err != nil {
-		errStr := fmt.Sprintf("error parsing config from %s: %s\n", file, err)
-		fmt.Fprint(os.Stderr, errStr)
+		errStr := fmt.Sprintf("%s: %s", file, err)
+		//fmt.Fprint(os.Stderr, errStr)
 		errs = append(errs, errors.New(errStr))
 		return nil, errs
 	}
@@ -635,11 +736,24 @@ func parseConfigurationFile(file string) (*configparser.ConfigParser, []error) {
 		config.dsDigestType = uint8(dsDigestType)
 		_debug(fmt.Sprintf("DS records digest type set to %d from configuration", config.dsDigestType))
 	}
+
 	// optional, where fallback defaults are baked in
 	// for example, if you don't specify the endpoint, it'll default to prod
 	config.apiEndpoint, err = p.Get("api", "endpoint")
 	if err != nil {
 		_debug("no API endpoint in configuration, so falling back to production")
+	}
+
+	tmp, err = p.Get("register", "defaultContact")
+	if err != nil {
+		_debug("no default contact specified")
+	} else {
+		defaultContact, err := strconv.ParseUint(tmp, 10, 32)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error converting default contact configuration string (%s) to integer: %s", tmp, err)
+			os.Exit(1)
+		}
+		config.defaultContact = int(defaultContact)
 	}
 
 	if errs == nil {
