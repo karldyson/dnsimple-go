@@ -9,6 +9,7 @@ perl scripts as an opportunity to learn Go.
 So far, there are the following examples:
 
 * dnsimple-ds
+* dnsimple-cds
 * dnsimple-ns
 * dnsimple-domain
 * dnsimple-contact
@@ -52,6 +53,32 @@ as this will result in the domain becoming insecure due to the chain of trust
 being broken.
 
 Again, this behaviour can be overridden with the -force flag
+
+### dnsimple-cds
+
+dnsimple-cds facilitates the automation of DS sync from published CDS records.
+
+At the time of writing it runs on my hidden zone primary, which is configured to
+recurse with validation for localhost.
+
+The code checks the CDS record set and if there's a mismatch with the DS record
+set, it makes the relevant modifications via the DNSimple API.
+
+You can run it against other domains, but if they're not in the DNSimple acccount,
+dry run mode will be set and it'll just tell you about the status.
+
+If you don't supply a domain on the CLI, it'll loop through all of the domains in
+the account.
+
+If run directly on the zone primary, it'll also facilitate the intial population of
+the DS record because it'll trust the auth response.
+
+TODO includes tightening up that trust and consideration on having it look up the
+auth servers for a domain to reduce caching effects, but it's running once per hour
+from cron and is working well in my testing so far.
+
+Changes in common.go introduced to support this need tidying up; but that's a
+learning opportunity for me as I learn more go!
 
 ### dnsimple-ns
 
