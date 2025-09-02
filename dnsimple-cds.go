@@ -209,12 +209,14 @@ func checkCDSvsDS(d string, dryrun bool) error {
 					if err == nil {
 						fmt.Printf("DS %d/%d created in the registry with ID %d\n", dsTag, ds.Algorithm, dsResponse.Data.ID)
 					} else {
-						fmt.Fprintf(os.Stderr, "Error creating DS record in the registry: %s\n", err)
+						fmt.Printf("DS %d/%d addition failed: %s\n", dsTag, ds.Algorithm, err)
 					}
 				}
 			}
 		}
 	} else {
+		var additionFailed bool = false
+
 		fmt.Printf("Checking DS exists for each CDS\n")
 
 		// look through the CDS records to see if any are missing from the DS records (and need adding)
@@ -238,45 +240,51 @@ func checkCDSvsDS(d string, dryrun bool) error {
 						delegationSignerRecord, _ := makeDelagationSignerRecordFromCds(cds)
 						client := getApiClient()
 						dsResponse, err := client.Domains.CreateDelegationSignerRecord(context.Background(), config.accountNumber, d, delegationSignerRecord)
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "Error: error creating DS record in the registry: %s\n", err)
+						if err == nil {
+							fmt.Printf("DS %d/%d (ID %d) added\n", cdsTag, cds.Algorithm, dsResponse.Data.ID)
+						} else {
+							fmt.Printf("DS %d/%d addition failed: %s\n", cdsTag, cds.Algorithm, err)
+							additionFailed = true
 							continue
 						}
-						fmt.Printf("DS %d/%d created in the registry with ID %d\n", cdsTag, cds.Algorithm, dsResponse.Data.ID)
 					}
 				}
 			}
 		}
 
-		fmt.Printf("Checking CDS exists for each DS\n")
+		if additionFailed {
+			fmt.Printf("Cannot process CDS for DS removals when DS additions failed\n")
+		} else {
+			fmt.Printf("Checking CDS exists for each DS\n")
 
-		// look through the DS records to see if any are missing from the CDS records (and need removing)
-		for ds := range dsrrs {
-			cds, ok := cdsrrs[ds]
-			if ok {
-				fmt.Printf("CDS %d/%d exists\n", ds, cds.Algorithm)
-			} else {
-				fmt.Printf("CDS %d/%d is missing so the DS needs removing\n", ds, dsrrs[ds].Algorithm)
-				if dryrun {
-					fmt.Printf("Dryrun, no alterations made\n")
-					continue
+			// look through the DS records to see if any are missing from the CDS records (and need removing)
+			for ds := range dsrrs {
+				cds, ok := cdsrrs[ds]
+				if ok {
+					fmt.Printf("CDS %d/%d exists\n", ds, cds.Algorithm)
 				} else {
-					fmt.Printf("Attempting removal of DS with keytag %d\n", ds)
+					fmt.Printf("CDS %d/%d is missing so the DS needs removing\n", ds, dsrrs[ds].Algorithm)
+					if dryrun {
+						fmt.Printf("Dryrun, no alterations made\n")
+						continue
+					} else {
+						fmt.Printf("Attempting removal of DS with keytag %d\n", ds)
 
-					dsR, ok, dsCount, err := dsExistsInRegistry(d, ds)
-					if err == nil && ok {
-						_verbose(fmt.Sprintf("DS %d/%d is one of %d that exist in the registry (ID %d)", ds, dsrrs[ds].Algorithm, dsCount, dsR.ID))
-						client := getApiClient()
-						_, err := client.Domains.DeleteDelegationSignerRecord(context.Background(), config.accountNumber, d, dsR.ID)
-						if err == nil {
-							fmt.Printf("DS %d/%d (ID %d) deleted\n", dsrrs[ds].KeyTag, dsrrs[ds].Algorithm, dsR.ID)
+						dsR, ok, dsCount, err := dsExistsInRegistry(d, ds)
+						if err == nil && ok {
+							_verbose(fmt.Sprintf("DS %d/%d is one of %d that exist in the registry (ID %d)", ds, dsrrs[ds].Algorithm, dsCount, dsR.ID))
+							client := getApiClient()
+							_, err := client.Domains.DeleteDelegationSignerRecord(context.Background(), config.accountNumber, d, dsR.ID)
+							if err == nil {
+								fmt.Printf("DS %d/%d (ID %d) deleted\n", dsrrs[ds].KeyTag, dsrrs[ds].Algorithm, dsR.ID)
+							} else {
+								fmt.Fprintf(os.Stderr, "Error: error received from registrar API while deleting DS record (keytag %s, ID %d): %d\n", err, cds.KeyTag, dsR.ID)
+								continue
+							}
 						} else {
-							fmt.Fprintf(os.Stderr, "Error: error received from registrar API while deleting DS record (keytag %s, ID %d): %d\n", err, cds.KeyTag, dsR.ID)
+							fmt.Fprintf(os.Stderr, "Error: DS %d/%d is not one of the %d in the registry.\n", ds, dsrrs[ds].Algorithm, dsCount)
 							continue
 						}
-					} else {
-						fmt.Fprintf(os.Stderr, "Error: DS %d/%d is not one of the %d in the registry.\n", ds, dsrrs[ds].Algorithm, dsCount)
-						continue
 					}
 				}
 			}
