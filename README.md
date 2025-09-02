@@ -54,7 +54,7 @@ being broken.
 
 Again, this behaviour can be overridden with the -force flag
 
-### dnsimple-cds
+### dnsimple-cds
 
 dnsimple-cds facilitates the automation of DS sync from published CDS records.
 
